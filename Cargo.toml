@@ -15,12 +15,14 @@ exclude = [".github"]
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies.bevy]
-version = "0.14.0-rc.2"
+git = "https://github.com/TotalKrill/bevy"
+branch = "cosmic-text"
 default-features = false
 features = ["bevy_ui", "bevy_asset", "bevy_text"]
 
 [dev-dependencies.bevy]
-version = "0.14.0-rc.2"
+git = "https://github.com/TotalKrill/bevy"
+branch = "cosmic-text"
 default-features = true
 
 [lints.rust]
@@ -28,3 +30,6 @@ missing_docs = "warn"
 
 [lints.clippy]
 type_complexity = "allow"
+
+[patch.crates-io]
+cosmic-text = { git = 'https://github.com/pop-os/cosmic-text.git' }
