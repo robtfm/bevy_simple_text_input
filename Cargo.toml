@@ -17,6 +17,9 @@ default = ["std"]
 std = ["bevy/std"]
 libm = ["bevy/libm"]
 
+[dependencies]
+once_cell = "1.19.0"
+
 [dependencies.bevy]
 version = "0.16.0"
 default-features = false
