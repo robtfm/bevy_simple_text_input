@@ -2,13 +2,14 @@
 
 use bevy::prelude::*;
 use bevy_simple_text_input::{
-    TextInput, TextInputPlugin, TextInputSettings, TextInputSubmitEvent, TextInputSystem,
-    TextInputTextColor, TextInputTextFont, TextInputValue,
+    TextInput, TextInputPlugin, TextInputSelectionStyle, TextInputSettings, TextInputSubmitEvent,
+    TextInputSystem, TextInputTextColor, TextInputTextFont, TextInputValue,
 };
 
 const BORDER_COLOR_ACTIVE: Color = Color::srgb(0.75, 0.52, 0.99);
 const TEXT_COLOR: Color = Color::srgb(0.9, 0.9, 0.9);
 const BACKGROUND_COLOR: Color = Color::srgb(0.15, 0.15, 0.15);
+const SELECTION_COLOR: Color = Color::srgb(0.35, 0.35, 1.0);
 
 fn main() {
     App::new()
@@ -47,6 +48,10 @@ fn setup(mut commands: Commands) {
                     ..Default::default()
                 }),
                 TextInputTextColor(TextColor(TEXT_COLOR)),
+                TextInputSelectionStyle {
+                    color: Some(BACKGROUND_COLOR),
+                    background: Some(SELECTION_COLOR),
+                },
                 TextInputSettings {
                     multiline: true,
                     ..Default::default()

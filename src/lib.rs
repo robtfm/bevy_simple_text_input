@@ -36,7 +36,7 @@ use bevy::{
     prelude::*,
     text::{
         ComputedTextBlock, CosmicBuffer, CosmicFontSystem, LineBreak,
-        cosmic_text::{Action, Cursor, Edit, Editor},
+        cosmic_text::{Action, Cursor, Edit, Editor, Selection},
     },
     ui::FocusPolicy,
 };
@@ -57,21 +57,22 @@ impl Plugin for TextInputPlugin {
             .add_systems(
                 Update,
                 (
+                    blink_cursor,
+                    set_positions,
+                    set_selection,
+                    show_hide_placeholder,
+                    update_style,
+                    update_placeholder_style,
                     keyboard,
-                    update_value.after(keyboard),
-                    (blink_cursor, set_positions)
-                        .chain()
-                        .after(keyboard)
-                        .ambiguous_with(update_value)
-                        .ambiguous_with(update_style),
-                    (update_style, update_placeholder_style).ambiguous_with(update_value),
-                    show_hide_placeholder.after(keyboard),
+                    update_value,
                 )
+                    .chain()
                     .in_set(TextInputSystem),
             )
             .register_type::<TextInputSettings>()
             .register_type::<TextInputTextFont>()
             .register_type::<TextInputTextColor>()
+            .register_type::<TextInputSelectionStyle>()
             .register_type::<TextInputInactive>()
             .register_type::<TextInputCursorTimer>()
             .register_type::<TextInputInner>()
@@ -96,6 +97,7 @@ impl Plugin for TextInputPlugin {
     TextInputSettings,
     TextInputTextFont,
     TextInputTextColor,
+    TextInputSelectionStyle,
     TextInputInactive,
     TextInputCursorTimer,
     TextInputValue,
@@ -112,6 +114,21 @@ pub struct TextInputTextFont(pub TextFont);
 /// The Bevy `TextColor` that will be used when creating the text input's inner Bevy `TextBundle`.
 #[derive(Component, Default, Reflect)]
 pub struct TextInputTextColor(pub TextColor);
+
+/// selection color and background color
+#[derive(Component, Default, Reflect)]
+pub struct TextInputSelectionStyle {
+    /// selected text color
+    pub color: Option<Color>,
+    /// selected text background color
+    pub background: Option<Color>,
+}
+
+#[derive(Component)]
+struct TextInputSelection;
+
+#[derive(Component)]
+struct TextInputContainer;
 
 /// If true, the text input does not respond to keyboard events and the cursor is hidden.
 #[derive(Component, Default, Reflect)]
@@ -293,7 +310,10 @@ struct TextInputPlaceholderInner;
 struct TextInputInner;
 
 #[derive(Component)]
-struct CosmicEditor(Editor<'static>);
+struct CosmicEditor {
+    editor: Editor<'static>,
+    selection_bounds: Option<(usize, usize)>,
+}
 
 #[derive(Component)]
 struct TextInputCursorDisplay;
@@ -310,36 +330,13 @@ pub struct TextInputSubmitEvent {
 /// A convenience parameter for dealing with a text input's inner Bevy `Text` entity.
 #[derive(SystemParam)]
 struct InnerText<'w, 's> {
-    text_query: Query<
-        'w,
-        's,
-        (
-            &'static mut Text,
-            &'static mut TextFont,
-            &'static mut TextColor,
-        ),
-        With<TextInputInner>,
-    >,
+    inner_query: Query<'w, 's, Entity, With<TextInputInner>>,
     computed_text_query: Query<'w, 's, &'static ComputedTextBlock, With<TextInputInner>>,
     computed_node_query: Query<'w, 's, &'static ComputedNode, With<TextInputInner>>,
     cursor_query: Query<'w, 's, &'static mut Node, With<TextInputCursorDisplay>>,
     children_query: Query<'w, 's, &'static Children>,
 }
 impl InnerText<'_, '_> {
-    fn get_mut(&mut self, entity: Entity) -> Option<&mut Text> {
-        self.text_query
-            .get_mut(self.inner_entity(entity)?)
-            .ok()
-            .map(|(text, _, _)| text.into_inner())
-    }
-
-    fn get_style_mut(&mut self, entity: Entity) -> Option<(&mut TextFont, &mut TextColor)> {
-        self.text_query
-            .get_mut(self.inner_entity(entity)?)
-            .ok()
-            .map(|(_, f, c)| (f.into_inner(), c.into_inner()))
-    }
-
     fn computed_text(&self, entity: Entity) -> Option<&ComputedTextBlock> {
         self.computed_text_query
             .get(self.inner_entity(entity)?)
@@ -366,7 +363,7 @@ impl InnerText<'_, '_> {
     fn inner_entity(&self, entity: Entity) -> Option<Entity> {
         self.children_query
             .iter_descendants(entity)
-            .find(|descendant_entity| self.text_query.get(*descendant_entity).is_ok())
+            .find(|descendant_entity| self.inner_query.get(*descendant_entity).is_ok())
     }
 }
 
@@ -401,6 +398,8 @@ fn keyboard(
         })
         .map(|(action, TextInputBinding { key, .. })| (*key, action));
 
+    let select = key_input.any_pressed([KeyCode::ShiftLeft, KeyCode::ShiftRight]);
+
     for (input_entity, settings, inactive, mut text_input, mut cursor_timer, mut editor) in
         &mut text_input_query
     {
@@ -412,14 +411,14 @@ fn keyboard(
 
         // use a lazy cell to avoid initializing the editor if not required (copying the buffer is expensive)
         let mut editor = Lazy::new(|| {
-            editor.0.with_buffer_mut(|b| {
+            editor.editor.with_buffer_mut(|b| {
                 b.clone_from(&inner_text.computed_text(input_entity).unwrap().buffer().0);
             });
             // we need to reset the cursor position if it's invalid, else some actions (backspace) will panic
-            if editor.0.cursor_position().is_none() {
-                editor.0.set_cursor(Cursor::default());
+            if editor.editor.cursor_position().is_none() {
+                editor.editor.set_cursor(Cursor::default());
             }
-            editor.0.start_change();
+            editor.editor.start_change();
             editor
         });
 
@@ -432,6 +431,11 @@ fn keyboard(
                 .clone()
                 .find(|(key, _)| *key == input.key_code)
             {
+                if select && editor.editor.selection() == Selection::None {
+                    let cursor = editor.editor.cursor();
+                    editor.editor.set_selection(Selection::Normal(cursor));
+                }
+
                 use TextInputAction::*;
                 let mut timer_should_reset = true;
 
@@ -461,7 +465,11 @@ fn keyboard(
                 };
 
                 if let Some(action) = editor_action {
-                    editor.0.action(&mut font_system, action);
+                    editor.editor.action(&mut font_system, action);
+                }
+
+                if !select {
+                    editor.editor.set_selection(Selection::None);
                 }
 
                 cursor_timer.should_reset |= timer_should_reset;
@@ -470,11 +478,11 @@ fn keyboard(
 
             match input.logical_key {
                 Key::Space => {
-                    editor.0.insert_string(" ", None);
+                    editor.editor.insert_string(" ", None);
                     cursor_timer.should_reset = true;
                 }
                 Key::Character(ref s) => {
-                    editor.0.insert_string(s, None);
+                    editor.editor.insert_string(s, None);
                     cursor_timer.should_reset = true;
                 }
                 _ => (),
@@ -487,10 +495,10 @@ fn keyboard(
                 value,
             });
         } else if let Ok(mut editor) = Lazy::into_value(editor) {
-            if let Some(_change) = editor.0.finish_change() {
+            if let Some(_change) = editor.editor.finish_change() {
                 // todo record changes for undo buffer
-                editor.0.shape_as_needed(&mut font_system, false);
-                editor.0.with_buffer(|b| {
+                editor.editor.shape_as_needed(&mut font_system, false);
+                editor.editor.with_buffer(|b| {
                     text_input.0 = b
                         .lines
                         .iter()
@@ -499,6 +507,36 @@ fn keyboard(
                         .join("");
                 })
             }
+
+            editor.selection_bounds = editor.editor.selection_bounds().map(|(from, to)| {
+                let index = |c: Cursor| -> usize {
+                    editor.editor.with_buffer(|b| {
+                        let mut lines = b.lines.iter();
+
+                        let prior_sum: usize = lines
+                            .by_ref()
+                            .take(c.line)
+                            .map(|line| line.text().len() + 1)
+                            .sum();
+
+                        let line_sum = lines
+                            .next()
+                            .map(|line| {
+                                line.text()
+                                    .char_indices()
+                                    .enumerate()
+                                    .find(|(_, ci)| ci.0 == c.index)
+                                    .map(|(ix, _)| ix)
+                                    .unwrap_or(line.text().len())
+                            })
+                            .unwrap_or(0);
+
+                        prior_sum + line_sum
+                    })
+                };
+
+                (index(from), index(to))
+            });
         }
     }
 
@@ -507,17 +545,28 @@ fn keyboard(
 
 fn update_value(
     mut input_query: Query<
-        (Entity, Ref<TextInputValue>, &TextInputSettings),
+        (
+            Entity,
+            Ref<TextInputValue>,
+            &TextInputSettings,
+            &CosmicEditor,
+        ),
         Changed<TextInputValue>,
     >,
-    mut inner_text: InnerText,
+    inner_text: InnerText,
+    mut writer: TextUiWriter,
 ) {
-    for (entity, text_input, settings) in &mut input_query {
-        let Some(text) = inner_text.get_mut(entity) else {
+    for (entity, text_input, settings, editor) in &mut input_query {
+        let Some(inner_entity) = inner_text.inner_entity(entity) else {
             continue;
         };
 
-        text.0 = masked_value(&text_input.0, settings.mask_character);
+        let mut section_values = section_values(
+            &text_input.0,
+            editor.selection_bounds,
+            settings.mask_character,
+        );
+        writer.for_each_text(inner_entity, |mut t| *t = section_values.next().unwrap());
     }
 }
 
@@ -540,7 +589,10 @@ fn create(
 
         let text = commands
             .spawn((
+                // pre-selection
                 Text::new(value),
+                font.0.clone(),
+                color.0.clone(),
                 Node {
                     min_height: Val::Percent(100.0),
                     ..Default::default()
@@ -553,6 +605,45 @@ fn create(
                 Name::new("TextInputInner"),
                 TextInputInner,
             ))
+            .with_children(|parent| {
+                // selection
+                parent.spawn((TextSpan::default(), font.0.clone(), color.0.clone()));
+                // post-selection
+                parent.spawn((TextSpan::default(), font.0.clone(), color.0.clone()));
+            })
+            .id();
+
+        let selection_hilight = commands
+            .spawn((
+                Node {
+                    position_type: PositionType::Absolute,
+                    display: Display::Flex,
+                    width: Val::Percent(100.0),
+                    height: Val::Percent(100.0),
+                    ..Default::default()
+                },
+                ZIndex(-1),
+                TextInputSelection,
+            ))
+            .id();
+
+        let cursor = commands
+            .spawn((
+                Node {
+                    display: Display::None,
+                    width: Val::Px(1f32.max(font.0.font_size * 0.05)),
+                    height: Val::Px(font.0.font_size),
+                    position_type: PositionType::Absolute,
+                    ..Default::default()
+                },
+                BackgroundColor(Color::WHITE),
+                TextInputCursorDisplay,
+            ))
+            .id();
+
+        let container = commands
+            .spawn((Node::default(), TextInputContainer))
+            .add_children(&[text, selection_hilight, cursor])
             .id();
 
         let placeholder_font = placeholder
@@ -595,7 +686,8 @@ fn create(
                         Overflow::scroll_x()
                     },
                     justify_content: JustifyContent::FlexStart,
-                    align_items: AlignItems::FlexEnd,
+                    align_items: AlignItems::FlexStart,
+                    min_width: Val::Percent(100.),
                     max_width: Val::Percent(100.),
                     min_height: Val::Percent(100.),
                     max_height: Val::Percent(100.),
@@ -605,32 +697,19 @@ fn create(
             ))
             .id();
 
-        let cursor = commands
-            .spawn((
-                Node {
-                    display: Display::None,
-                    width: Val::Px(1f32.max(font.0.font_size * 0.05)),
-                    height: Val::Px(font.0.font_size),
-                    position_type: PositionType::Absolute,
-                    ..Default::default()
-                },
-                BackgroundColor(Color::WHITE),
-                TextInputCursorDisplay,
-            ))
-            .id();
-
-        commands.entity(overflow_container).add_child(text);
-        commands.entity(trigger.target()).add_children(&[
-            overflow_container,
-            placeholder_text,
-            cursor,
-        ]);
+        commands.entity(overflow_container).add_child(container);
+        commands
+            .entity(trigger.target())
+            .add_children(&[overflow_container, placeholder_text]);
 
         // Prevent clicks from registering on UI elements underneath the text input.
         commands
             .entity(trigger.target())
             .insert(FocusPolicy::Block)
-            .insert(CosmicEditor(Editor::new(CosmicBuffer::default().0)));
+            .insert(CosmicEditor {
+                editor: Editor::new(CosmicBuffer::default().0),
+                selection_bounds: None,
+            });
     }
 }
 
@@ -650,15 +729,16 @@ fn set_positions(
         )>,
     >,
     mut inner_style_query: Query<
-        (&mut Node, &ComputedNode, &ChildOf),
-        (Without<TextInputCursorDisplay>, With<TextInputInner>),
+        (&mut Node, &ComputedNode),
+        (Without<TextInputCursorDisplay>, With<TextInputContainer>),
     >,
 
-    mut container_style_query: Query<
-        (&mut Node, &ComputedNode),
-        (Without<TextInputCursorDisplay>, Without<TextInputInner>),
+    mut container_query: Query<
+        &ComputedNode,
+        (Without<TextInputCursorDisplay>, Without<TextInputContainer>),
     >,
     mut inner_text: InnerText,
+    children: Query<&Children>,
     mut font_system: ResMut<CosmicFontSystem>,
 ) {
     let px = |val: Val| match val {
@@ -673,16 +753,18 @@ fn set_positions(
             .map(ComputedNode::inverse_scale_factor)
             .unwrap_or(1.0);
 
-        let Some(inner_entity) = inner_text.inner_entity(entity) else {
-            continue;
-        };
-
-        let Ok((mut container_style, child_node, parent)) = inner_style_query.get_mut(inner_entity)
+        let Some((mut container_style, child_node)) = children
+            .iter_descendants(entity)
+            .find(|e| inner_style_query.get(*e).is_ok())
+            .and_then(|e| inner_style_query.get_mut(e).ok())
         else {
             continue;
         };
 
-        let Ok((mut parent_style, parent_node)) = container_style_query.get_mut(parent.parent())
+        let Some(parent_node) = children
+            .iter_descendants(entity)
+            .find(|e| container_query.get(*e).is_ok())
+            .and_then(|e| container_query.get_mut(e).ok())
         else {
             continue;
         };
@@ -692,9 +774,10 @@ fn set_positions(
         };
 
         let editor = editor.bypass_change_detection();
-        editor.0.shape_as_needed(&mut font_system, false);
+        editor.editor.shape_as_needed(&mut font_system, false);
 
-        let cursor_position = IVec2::from(editor.0.cursor_position().unwrap_or((0, 0))).as_vec2()
+        let cursor_position = IVec2::from(editor.editor.cursor_position().unwrap_or((0, 0)))
+            .as_vec2()
             * inverse_scale_factor;
 
         let child_size = child_node.size();
@@ -710,8 +793,8 @@ fn set_positions(
             _ => child_size.y - parent_size.y,
         };
 
-        let mut relative_cursor_position = cursor_position - Vec2::new(box_pos_x, box_pos_y);
-        let cursor_size = Vec2::new(px(cursor_style.width), px(cursor_style.height));
+        let relative_cursor_position = cursor_position - Vec2::new(box_pos_x, box_pos_y);
+        let cursor_size = Vec2::new(px(cursor_style.width) + 1.0, px(cursor_style.height) + 1.0);
 
         if relative_cursor_position.cmplt(Vec2::ZERO).any()
             || (relative_cursor_position + cursor_size)
@@ -719,12 +802,9 @@ fn set_positions(
                 .any()
         {
             let req_px = parent_size * 0.5 - cursor_position;
-            let req_px = req_px.clamp(parent_size - child_size, Vec2::ZERO);
+            let req_px = req_px.clamp(parent_size - child_size - cursor_size * Vec2::X, Vec2::ZERO);
             container_style.left = Val::Px(req_px.x);
             container_style.top = Val::Px(req_px.y);
-            parent_style.justify_content = JustifyContent::FlexStart;
-            parent_style.align_items = AlignItems::FlexStart;
-            relative_cursor_position = cursor_position + req_px;
         }
 
         cursor_style.display = if inactive.0 {
@@ -733,10 +813,89 @@ fn set_positions(
             Display::Flex
         };
 
-        cursor_style.left = Val::Px(relative_cursor_position.x + px(cursor_style.height) * 0.07);
-        cursor_style.top = Val::Px(relative_cursor_position.y + px(cursor_style.height) * 0.2);
+        cursor_style.left = Val::Px(cursor_position.x);
+        cursor_style.top = Val::Px(cursor_position.y + px(cursor_style.height) * 0.1);
 
         cursor_timer.timer.reset();
+    }
+}
+
+fn set_selection(
+    mut query: Query<(Entity, &mut CosmicEditor, &TextInputSelectionStyle), Changed<CosmicEditor>>,
+    children: Query<&Children>,
+    sel: Query<&TextInputSelection>,
+    mut commands: Commands,
+    mut font_system: ResMut<CosmicFontSystem>,
+) {
+    for (entity, mut editor, style) in query.iter_mut() {
+        let Some(selection) = children
+            .iter_descendants(entity)
+            .find(|c| sel.get(*c).is_ok())
+        else {
+            continue;
+        };
+
+        let editor = editor.bypass_change_detection();
+
+        commands.entity(selection).despawn_related::<Children>();
+
+        if let Some((from, to)) = editor.editor.selection_bounds() {
+            let mut segments = Vec::default();
+
+            editor.editor.with_buffer_mut(|b| {
+                b.shape_until_cursor(&mut font_system, to, false);
+
+                let mut segment_y = f32::NEG_INFINITY;
+
+                let runs = b
+                    .layout_runs()
+                    .skip_while(|run| run.line_i < from.line)
+                    .take_while(|run| run.line_i <= to.line);
+
+                for run in runs {
+                    let glyphs = run
+                        .glyphs
+                        .iter()
+                        .skip_while(|g| run.line_i == from.line && g.start < from.index)
+                        .take_while(|g| run.line_i < to.line || g.end <= to.index);
+
+                    for glyph in glyphs {
+                        debug!("g: {},{}", glyph.x, glyph.y);
+
+                        if run.line_top + glyph.y != segment_y {
+                            segments.push(Vec4::new(
+                                glyph.x,
+                                run.line_top + glyph.y,
+                                glyph.w,
+                                run.line_height,
+                            ));
+
+                            segment_y = glyph.y;
+                        } else {
+                            let segment = segments.last_mut().unwrap();
+
+                            segment.z = glyph.x + glyph.w - segment.x;
+                        }
+                    }
+                }
+            });
+
+            commands.entity(selection).with_children(|c| {
+                for segment in segments {
+                    c.spawn((
+                        Node {
+                            position_type: PositionType::Absolute,
+                            left: Val::Px(segment.x),
+                            top: Val::Px(segment.y),
+                            width: Val::Px(segment.z),
+                            height: Val::Px(segment.w),
+                            ..Default::default()
+                        },
+                        BackgroundColor(style.background.unwrap_or(Color::srgb(0.3, 0.3, 1.0))),
+                    ));
+                }
+            });
+        }
     }
 }
 
@@ -797,30 +956,39 @@ fn update_style(
             Entity,
             &TextInputTextFont,
             &TextInputTextColor,
+            &TextInputSelectionStyle,
             &mut TextInputInactive,
         ),
         Or<(
             Changed<TextInputInactive>,
             Changed<TextInputTextFont>,
+            Changed<TextInputSelectionStyle>,
             Changed<TextInputTextColor>,
         )>,
     >,
     mut inner_text: InnerText,
+    mut writer: TextUiWriter,
 ) {
-    for (entity, text_font, text_color, mut inactive) in &mut input_query {
-        let Some((font, color)) = inner_text.get_style_mut(entity) else {
+    for (entity, font, color, selection_color, mut inactive) in &mut input_query {
+        let Some(inner_entity) = inner_text.inner_entity(entity) else {
             continue;
         };
 
-        *font = text_font.0.clone();
-        *color = text_color.0.clone();
+        for index in [0, 2] {
+            writer.font(inner_entity, index).clone_from(&font.0);
+            writer.color(inner_entity, index).clone_from(&color.0);
+        }
+        writer
+            .color(inner_entity, 1)
+            .0
+            .clone_from(selection_color.color.as_ref().unwrap_or(&color.0));
 
         let Some(cursor) = inner_text.cursor_style(entity) else {
             continue;
         };
 
-        cursor.width = Val::Px(1f32.max(text_font.0.font_size * 0.05));
-        cursor.height = Val::Px(text_font.0.font_size);
+        cursor.width = Val::Px(1f32.max(font.0.font_size * 0.05));
+        cursor.height = Val::Px(font.0.font_size);
 
         inactive.set_changed()
     }
@@ -870,4 +1038,33 @@ fn update_placeholder_style(
         // mark so other systems update correctly
         inactive.set_changed()
     }
+}
+
+fn section_values(
+    value: &str,
+    bounds: Option<(usize, usize)>,
+    mask_character: Option<char>,
+) -> impl Iterator<Item = String> {
+    let vec = match bounds {
+        Some((from, to)) => {
+            let start = from.min(to);
+            let end = from.max(to);
+
+            vec![
+                masked_value(&value[0..start], mask_character),
+                masked_value(&value[start..end], mask_character),
+                masked_value(&value[end..], mask_character),
+            ]
+        }
+
+        None => {
+            vec![
+                masked_value(value, mask_character),
+                String::default(),
+                String::default(),
+            ]
+        }
+    };
+
+    vec.into_iter()
 }
