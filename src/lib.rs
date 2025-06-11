@@ -34,6 +34,7 @@ use bevy::{
     ecs::{event::EventCursor, system::SystemParam},
     input::keyboard::{Key, KeyboardInput},
     prelude::*,
+    tasks::IoTaskPool,
     text::{
         ComputedTextBlock, CosmicBuffer, CosmicFontSystem, LineBreak,
         cosmic_text::{Action, Change, Cursor, Edit, Editor, Selection},
@@ -43,7 +44,7 @@ use bevy::{
 use once_cell::unsync::Lazy;
 
 #[cfg(feature = "clipboard")]
-use copypasta::{ClipboardContext, ClipboardProvider};
+use copypwasmta::{ClipboardContext, ClipboardProvider};
 
 /// A Bevy `Plugin` providing the systems and assets required to make a [`TextInput`] work.
 pub struct TextInputPlugin;
@@ -446,6 +447,43 @@ impl InnerText<'_, '_> {
     }
 }
 
+// get results from a task
+#[cfg(feature = "clipboard")]
+trait TaskExt {
+    type Output;
+
+    fn complete(&mut self) -> Option<Self::Output>;
+}
+
+#[cfg(feature = "clipboard")]
+impl<T> TaskExt for bevy::tasks::Task<T> {
+    type Output = T;
+
+    #[cfg(target_arch = "wasm32")]
+    fn complete(&mut self) -> Option<Self::Output> {
+        use futures_lite::FutureExt;
+        // wasm doesn't have `is_finished``, but polling is cheap as it is just a oneshot receiver
+        let mut context = std::task::Context::from_waker(std::task::Waker::noop());
+        if let std::task::Poll::Ready(res) = self.poll(&mut context) {
+            Some(res)
+        } else {
+            None
+        }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn complete(&mut self) -> Option<Self::Output> {
+        match self.is_finished() {
+            true => Some(
+                futures_lite::future::block_on(futures_lite::future::poll_once(self))
+                    .expect("is_finished but !Some?"),
+            ),
+
+            false => None,
+        }
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn keyboard(
     key_input: Res<ButtonInput<KeyCode>>,
@@ -463,8 +501,22 @@ fn keyboard(
     navigation: Res<TextInputNavigationBindings>,
     inner_text: InnerText,
     mut font_system: ResMut<CosmicFontSystem>,
+    #[cfg(feature = "clipboard")] mut clipboard_read: Local<
+        Option<(Entity, bevy::tasks::Task<Result<String, String>>)>,
+    >,
 ) {
-    if input_reader.clone().read(&input_events).next().is_none() {
+    #[allow(unused_mut)]
+    let mut copy_text: Option<(Entity, Result<String, String>)> = None;
+
+    #[cfg(feature = "clipboard")]
+    if let Some((ent, read_task)) = clipboard_read.as_mut() {
+        if let Some(result) = read_task.complete() {
+            copy_text = Some((*ent, result));
+            *clipboard_read = None;
+        }
+    }
+
+    if copy_text.is_none() && input_reader.clone().read(&input_events).next().is_none() {
         return;
     }
 
@@ -501,6 +553,21 @@ fn keyboard(
             editor.editor.start_change();
             editor
         });
+
+        #[cfg(feature = "clipboard")]
+        if let Some(copy_result) = copy_text
+            .clone()
+            .filter(|(copy_ent, _)| input_entity == *copy_ent)
+            .map(|(_, result)| result)
+        {
+            match copy_result {
+                Ok(text) => {
+                    editor.editor.delete_selection();
+                    editor.editor.insert_string(&text, None);
+                }
+                Err(err) => warn!("failed to read clipboard: {err}"),
+            }
+        }
 
         for input in input_reader.clone().read(&input_events) {
             if !input.state.is_pressed() {
@@ -558,11 +625,21 @@ fn keyboard(
                     Cut | Copy => {
                         {
                             if let Some(selection) = editor.editor.copy_selection() {
-                                if let Ok(mut ctx) = ClipboardContext::new() {
-                                    if let Err(e) = ctx.set_contents(selection) {
-                                        warn!("failed to copy : {e}");
-                                    }
-                                }
+                                IoTaskPool::get()
+                                    .spawn(async move {
+                                        let result = match ClipboardContext::new() {
+                                            Ok(mut ctx) => ctx
+                                                .set_contents(selection)
+                                                .await
+                                                .map_err(|e| e.to_string()),
+                                            Err(e) => Err(e.to_string()),
+                                        };
+
+                                        if let Err(e) = result {
+                                            warn!("failed to copy to clipboard: {e:?}");
+                                        }
+                                    })
+                                    .detach();
                             }
                         }
 
@@ -577,13 +654,15 @@ fn keyboard(
                     }
                     #[cfg(feature = "clipboard")]
                     Paste => {
-                        editor.editor.delete_selection();
-                        if let Ok(mut ctx) = ClipboardContext::new() {
-                            if let Ok(selection) = ctx.get_contents() {
-                                editor.editor.insert_string(&selection, None);
-                            }
-                        }
-
+                        *clipboard_read = Some((
+                            input_entity,
+                            IoTaskPool::get().spawn(async {
+                                let Ok(mut ctx) = ClipboardContext::new() else {
+                                    return Err("can't get clipboard".to_owned());
+                                };
+                                ctx.get_contents().await.map_err(|e| format!("{e:?}"))
+                            }),
+                        ));
                         None
                     }
 

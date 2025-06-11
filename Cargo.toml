@@ -16,14 +16,12 @@ exclude = [".github"]
 default = ["std", "clipboard"]
 std = ["bevy/std"]
 libm = ["bevy/libm"]
-clipboard = ["dep:copypasta"]
-# clipboard = ["dep:copypwasmta", "dep:futures-lite"]
+clipboard = ["dep:copypwasmta", "dep:futures-lite"]
 
 [dependencies]
 once_cell = "1.19.0"
-copypasta = { version = "0.10", optional = true }
-# copypwasmta = { git = "https://github.com/robtfm/copypwamsta", optional = true }
-# futures-lite = { version = "2", optional = true }
+copypwasmta = { git = "https://github.com/robtfm/copypwasmta", optional = true }
+futures-lite = { version = "2", optional = true }
 
 [dependencies.bevy]
 version = "0.16.0"
