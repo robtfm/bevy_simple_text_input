@@ -36,11 +36,14 @@ use bevy::{
     prelude::*,
     text::{
         ComputedTextBlock, CosmicBuffer, CosmicFontSystem, LineBreak,
-        cosmic_text::{Action, Cursor, Edit, Editor, Selection},
+        cosmic_text::{Action, Change, Cursor, Edit, Editor, Selection},
     },
     ui::FocusPolicy,
 };
 use once_cell::unsync::Lazy;
+
+#[cfg(feature = "clipboard")]
+use copypasta::{ClipboardContext, ClipboardProvider};
 
 /// A Bevy `Plugin` providing the systems and assets required to make a [`TextInput`] work.
 pub struct TextInputPlugin;
@@ -193,6 +196,21 @@ pub enum TextInputAction {
     Submit,
     /// add a new line
     NewLine,
+    /// select full buffer
+    SelectAll,
+    /// cut
+    #[cfg(feature = "clipboard")]
+    Cut,
+    /// copy
+    #[cfg(feature = "clipboard")]
+    Copy,
+    /// pasta
+    #[cfg(feature = "clipboard")]
+    Paste,
+    /// undo
+    Undo,
+    /// redo
+    Redo,
 }
 /// A resource in which key bindings can be specified. Bindings are given as a tuple of (`TextInputAction`, `TextInputBinding`).
 ///
@@ -248,6 +266,54 @@ impl Default for TextInputNavigationBindings {
             (NewLine, TextInputBinding::new(Enter, [ShiftRight])),
             (Submit, TextInputBinding::new(Enter, [])),
             (Submit, TextInputBinding::new(NumpadEnter, [])),
+            (SelectAll, TextInputBinding::new(KeyA, [ControlLeft])),
+            (SelectAll, TextInputBinding::new(KeyA, [ControlRight])),
+            #[cfg(feature = "clipboard")]
+            (
+                TextInputAction::Cut,
+                TextInputBinding::new(KeyX, [ControlLeft]),
+            ),
+            #[cfg(feature = "clipboard")]
+            (
+                TextInputAction::Cut,
+                TextInputBinding::new(KeyX, [ControlRight]),
+            ),
+            #[cfg(feature = "clipboard")]
+            (
+                TextInputAction::Copy,
+                TextInputBinding::new(KeyC, [ControlLeft]),
+            ),
+            #[cfg(feature = "clipboard")]
+            (
+                TextInputAction::Copy,
+                TextInputBinding::new(KeyC, [ControlRight]),
+            ),
+            #[cfg(feature = "clipboard")]
+            (
+                TextInputAction::Paste,
+                TextInputBinding::new(KeyV, [ControlLeft]),
+            ),
+            #[cfg(feature = "clipboard")]
+            (
+                TextInputAction::Paste,
+                TextInputBinding::new(KeyV, [ControlRight]),
+            ),
+            (
+                TextInputAction::Undo,
+                TextInputBinding::new(KeyZ, [ControlLeft]),
+            ),
+            (
+                TextInputAction::Undo,
+                TextInputBinding::new(KeyZ, [ControlRight]),
+            ),
+            (
+                TextInputAction::Redo,
+                TextInputBinding::new(KeyY, [ControlLeft]),
+            ),
+            (
+                TextInputAction::Redo,
+                TextInputBinding::new(KeyY, [ControlRight]),
+            ),
         ])
     }
 }
@@ -313,6 +379,19 @@ struct TextInputInner;
 struct CosmicEditor {
     editor: Editor<'static>,
     selection_bounds: Option<(usize, usize)>,
+    undo: Vec<Change>,
+    redo: Vec<Change>,
+}
+
+impl Default for CosmicEditor {
+    fn default() -> Self {
+        Self {
+            editor: Editor::new(CosmicBuffer::default().0),
+            selection_bounds: None,
+            undo: Vec::default(),
+            redo: Vec::default(),
+        }
+    }
 }
 
 #[derive(Component)]
@@ -408,6 +487,7 @@ fn keyboard(
         }
 
         let mut submitted_value = None;
+        let mut is_undo_redo = false;
 
         // use a lazy cell to avoid initializing the editor if not required (copying the buffer is expensive)
         let mut editor = Lazy::new(|| {
@@ -431,25 +511,28 @@ fn keyboard(
                 .clone()
                 .find(|(key, _)| *key == input.key_code)
             {
+                let mut select = select;
+
                 if select && editor.editor.selection() == Selection::None {
                     let cursor = editor.editor.cursor();
                     editor.editor.set_selection(Selection::Normal(cursor));
                 }
 
                 use TextInputAction::*;
+                use bevy::text::cosmic_text::Motion;
                 let mut timer_should_reset = true;
 
                 let editor_action = match action {
-                    CharLeft => Some(Action::Motion(bevy::text::cosmic_text::Motion::Left)),
-                    CharRight => Some(Action::Motion(bevy::text::cosmic_text::Motion::Right)),
-                    TextStart => Some(Action::Motion(bevy::text::cosmic_text::Motion::BufferStart)),
-                    TextEnd => Some(Action::Motion(bevy::text::cosmic_text::Motion::BufferEnd)),
-                    LineStart => Some(Action::Motion(bevy::text::cosmic_text::Motion::Home)),
-                    LineEnd => Some(Action::Motion(bevy::text::cosmic_text::Motion::End)),
-                    WordLeft => Some(Action::Motion(bevy::text::cosmic_text::Motion::LeftWord)),
-                    WordRight => Some(Action::Motion(bevy::text::cosmic_text::Motion::RightWord)),
-                    LineUp => Some(Action::Motion(bevy::text::cosmic_text::Motion::Up)),
-                    LineDown => Some(Action::Motion(bevy::text::cosmic_text::Motion::Down)),
+                    CharLeft => Some(Action::Motion(Motion::Left)),
+                    CharRight => Some(Action::Motion(Motion::Right)),
+                    TextStart => Some(Action::Motion(Motion::BufferStart)),
+                    TextEnd => Some(Action::Motion(Motion::BufferEnd)),
+                    LineStart => Some(Action::Motion(Motion::Home)),
+                    LineEnd => Some(Action::Motion(Motion::End)),
+                    WordLeft => Some(Action::Motion(Motion::LeftWord)),
+                    WordRight => Some(Action::Motion(Motion::RightWord)),
+                    LineUp => Some(Action::Motion(Motion::Up)),
+                    LineDown => Some(Action::Motion(Motion::Down)),
                     DeletePrev => Some(Action::Backspace),
                     DeleteNext => Some(Action::Delete),
                     Submit => {
@@ -459,9 +542,82 @@ fn keyboard(
                             submitted_value = Some(std::mem::take(&mut text_input.0));
                         };
                         timer_should_reset = false;
-                        Some(Action::Motion(bevy::text::cosmic_text::Motion::BufferStart))
+                        Some(Action::Motion(Motion::BufferStart))
                     }
                     NewLine => settings.multiline.then_some(Action::Enter),
+                    SelectAll => {
+                        editor
+                            .editor
+                            .set_selection(Selection::Normal(Cursor::default()));
+
+                        select = true;
+
+                        Some(Action::Motion(Motion::BufferEnd))
+                    }
+                    #[cfg(feature = "clipboard")]
+                    Cut | Copy => {
+                        {
+                            if let Some(selection) = editor.editor.copy_selection() {
+                                if let Ok(mut ctx) = ClipboardContext::new() {
+                                    if let Err(e) = ctx.set_contents(selection) {
+                                        warn!("failed to copy : {e}");
+                                    }
+                                }
+                            }
+                        }
+
+                        if let Cut = action {
+                            editor.editor.delete_selection();
+                        } else {
+                            // avoid clearing selection on copy
+                            select = true;
+                        }
+
+                        None
+                    }
+                    #[cfg(feature = "clipboard")]
+                    Paste => {
+                        editor.editor.delete_selection();
+                        if let Ok(mut ctx) = ClipboardContext::new() {
+                            if let Ok(selection) = ctx.get_contents() {
+                                editor.editor.insert_string(&selection, None);
+                            }
+                        }
+
+                        None
+                    }
+
+                    Undo => {
+                        if let Some(mut undo) = editor.undo.pop() {
+                            undo.reverse();
+                            editor.editor.finish_change();
+                            editor.editor.apply_change(&undo);
+                            editor.editor.start_change();
+                            editor.redo.push(undo);
+                        }
+
+                        is_undo_redo = true;
+
+                        None
+                    }
+
+                    Redo => {
+                        if let Some(mut redo) = editor.redo.pop() {
+                            redo.reverse();
+
+                            editor.editor.finish_change();
+
+                            editor.editor.apply_change(&redo);
+
+                            editor.editor.start_change();
+
+                            editor.undo.push(redo);
+                        }
+
+                        is_undo_redo = true;
+
+                        None
+                    }
                 };
 
                 if let Some(action) = editor_action {
@@ -494,19 +650,25 @@ fn keyboard(
                 entity: input_entity,
                 value,
             });
+            editor.redo.clear();
+            editor.undo.clear();
         } else if let Ok(mut editor) = Lazy::into_value(editor) {
-            if let Some(_change) = editor.editor.finish_change() {
-                // todo record changes for undo buffer
-                editor.editor.shape_as_needed(&mut font_system, false);
-                editor.editor.with_buffer(|b| {
-                    text_input.0 = b
-                        .lines
-                        .iter()
-                        .map(|line| format!("{}{}", line.text(), line.ending().as_str()))
-                        .collect::<Vec<_>>()
-                        .join("");
-                })
+            if let Some(change) = editor.editor.finish_change() {
+                if !change.items.is_empty() && !is_undo_redo {
+                    editor.redo.clear();
+                    editor.undo.push(change);
+                }
             }
+
+            editor.editor.shape_as_needed(&mut font_system, false);
+            editor.editor.with_buffer(|b| {
+                text_input.0 = b
+                    .lines
+                    .iter()
+                    .map(|line| format!("{}{}", line.text(), line.ending().as_str()))
+                    .collect::<Vec<_>>()
+                    .join("");
+            });
 
             editor.selection_bounds = editor.editor.selection_bounds().map(|(from, to)| {
                 let index = |c: Cursor| -> usize {
@@ -592,8 +754,9 @@ fn create(
                 // pre-selection
                 Text::new(value),
                 font.0.clone(),
-                color.0.clone(),
+                color.0,
                 Node {
+                    min_width: Val::Percent(100.0),
                     min_height: Val::Percent(100.0),
                     ..Default::default()
                 },
@@ -607,9 +770,9 @@ fn create(
             ))
             .with_children(|parent| {
                 // selection
-                parent.spawn((TextSpan::default(), font.0.clone(), color.0.clone()));
+                parent.spawn((TextSpan::default(), font.0.clone(), color.0));
                 // post-selection
-                parent.spawn((TextSpan::default(), font.0.clone(), color.0.clone()));
+                parent.spawn((TextSpan::default(), font.0.clone(), color.0));
             })
             .id();
 
@@ -642,7 +805,14 @@ fn create(
             .id();
 
         let container = commands
-            .spawn((Node::default(), TextInputContainer))
+            .spawn((
+                Node {
+                    min_width: Val::Percent(100.0),
+                    min_height: Val::Percent(100.0),
+                    ..Default::default()
+                },
+                TextInputContainer,
+            ))
             .add_children(&[text, selection_hilight, cursor])
             .id();
 
@@ -706,10 +876,7 @@ fn create(
         commands
             .entity(trigger.target())
             .insert(FocusPolicy::Block)
-            .insert(CosmicEditor {
-                editor: Editor::new(CosmicBuffer::default().0),
-                selection_bounds: None,
-            });
+            .insert(CosmicEditor::default());
     }
 }
 
@@ -779,6 +946,8 @@ fn set_positions(
         let cursor_position = IVec2::from(editor.editor.cursor_position().unwrap_or((0, 0)))
             .as_vec2()
             * inverse_scale_factor;
+        println!("cursor: {:?}", editor.editor.cursor());
+        println!("cursor position: {}", cursor_position);
 
         let child_size = child_node.size();
         let parent_size = parent_node.size();
