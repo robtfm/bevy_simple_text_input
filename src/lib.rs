@@ -457,10 +457,7 @@ fn keyboard(
                         timer_should_reset = false;
                         Some(Action::Motion(bevy::text::cosmic_text::Motion::BufferStart))
                     }
-                    NewLine => {
-                        editor.0.insert_string("\n", None);
-                        None
-                    }
+                    NewLine => settings.multiline.then_some(Action::Enter),
                 };
 
                 if let Some(action) = editor_action {
@@ -497,9 +494,9 @@ fn keyboard(
                     text_input.0 = b
                         .lines
                         .iter()
-                        .map(|line| line.text())
+                        .map(|line| format!("{}{}", line.text(), line.ending().as_str()))
                         .collect::<Vec<_>>()
-                        .join("\n");
+                        .join("");
                 })
             }
         }
