@@ -80,12 +80,7 @@ impl Plugin for TextInputPlugin {
     }
 }
 
-const CURSOR_HANDLE: Handle<Font> = weak_handle!("82b134b2-92c0-461a-891f-c35b968f2b88");
-
 /// The main "driving component" for the Text Input.
-///
-/// In addition to its [required components](TextInput#impl-Component-for-TextInput), some other
-/// components may also be spawned with it: [`TextInputCursorPos`].
 ///
 /// # Example
 ///
@@ -142,6 +137,8 @@ impl Default for TextInputCursorTimer {
 /// A component containing the text input's settings.
 #[derive(Component, Default, Reflect)]
 pub struct TextInputSettings {
+    /// multiline
+    pub multiline: bool,
     /// If true, text is not cleared after pressing enter.
     pub retain_on_submit: bool,
     /// Mask text with the provided character.
@@ -159,6 +156,14 @@ pub enum TextInputAction {
     LineStart,
     /// Moves the cursor to the end of line.
     LineEnd,
+    /// move up one line
+    LineUp,
+    /// move down one line
+    LineDown,
+    /// document start
+    TextStart,
+    /// document end
+    TextEnd,
     /// Moves the cursor one word to the left.
     WordLeft,
     /// Moves the cursor one word to the right.
@@ -169,6 +174,8 @@ pub enum TextInputAction {
     DeleteNext,
     /// Triggers a `TextInputSubmitEvent`, optionally clearing the text input.
     Submit,
+    /// add a new line
+    NewLine,
 }
 /// A resource in which key bindings can be specified. Bindings are given as a tuple of (`TextInputAction`, `TextInputBinding`).
 ///
@@ -202,6 +209,10 @@ impl Default for TextInputNavigationBindings {
         use KeyCode::*;
         use TextInputAction::*;
         Self(vec![
+            (TextStart, TextInputBinding::new(Home, [ControlLeft])),
+            (TextStart, TextInputBinding::new(Home, [ControlRight])),
+            (TextEnd, TextInputBinding::new(End, [ControlLeft])),
+            (TextEnd, TextInputBinding::new(End, [ControlRight])),
             (LineStart, TextInputBinding::new(Home, [])),
             (LineEnd, TextInputBinding::new(End, [])),
             (WordLeft, TextInputBinding::new(ArrowLeft, [ControlLeft])),
@@ -210,9 +221,14 @@ impl Default for TextInputNavigationBindings {
             (WordRight, TextInputBinding::new(ArrowRight, [ControlRight])),
             (CharLeft, TextInputBinding::new(ArrowLeft, [])),
             (CharRight, TextInputBinding::new(ArrowRight, [])),
+            (LineUp, TextInputBinding::new(ArrowUp, [])),
+            (LineDown, TextInputBinding::new(ArrowDown, [])),
             (DeletePrev, TextInputBinding::new(Backspace, [])),
             (DeletePrev, TextInputBinding::new(NumpadBackspace, [])),
             (DeleteNext, TextInputBinding::new(Delete, [])),
+            // newline must be before submit as it is the same but with modifiers
+            (NewLine, TextInputBinding::new(Enter, [ShiftLeft])),
+            (NewLine, TextInputBinding::new(Enter, [ShiftRight])),
             (Submit, TextInputBinding::new(Enter, [])),
             (Submit, TextInputBinding::new(NumpadEnter, [])),
         ])
@@ -235,9 +251,16 @@ impl Default for TextInputNavigationBindings {
             (WordRight, TextInputBinding::new(ArrowRight, [AltRight])),
             (CharLeft, TextInputBinding::new(ArrowLeft, [])),
             (CharRight, TextInputBinding::new(ArrowRight, [])),
+            (LineUp, TextInputBinding::new(ArrowUp, [])),
+            (LineDown, TextInputBinding::new(ArrowDown, [])),
             (DeletePrev, TextInputBinding::new(Backspace, [])),
             (DeletePrev, TextInputBinding::new(NumpadBackspace, [])),
             (DeleteNext, TextInputBinding::new(Delete, [])),
+            // newline must be before submit as it is the same but with modifiers
+            (NewLine, TextInputBinding::new(Enter, [ShiftLeft])),
+            (NewLine, TextInputBinding::new(Enter, [ShiftRight])),
+            (NewLine, TextInputBinding::new(Enter, [AltLeft])),
+            (NewLine, TextInputBinding::new(Enter, [AltRight])),
             (Submit, TextInputBinding::new(Enter, [])),
             (Submit, TextInputBinding::new(NumpadEnter, [])),
         ])
@@ -415,6 +438,10 @@ fn keyboard(
                 let editor_action = match action {
                     CharLeft => Some(Action::Motion(bevy::text::cosmic_text::Motion::Left)),
                     CharRight => Some(Action::Motion(bevy::text::cosmic_text::Motion::Right)),
+                    TextStart => Some(Action::Motion(bevy::text::cosmic_text::Motion::BufferStart)),
+                    TextEnd => Some(Action::Motion(bevy::text::cosmic_text::Motion::BufferEnd)),
+                    LineStart => Some(Action::Motion(bevy::text::cosmic_text::Motion::Home)),
+                    LineEnd => Some(Action::Motion(bevy::text::cosmic_text::Motion::End)),
                     WordLeft => Some(Action::Motion(bevy::text::cosmic_text::Motion::LeftWord)),
                     WordRight => Some(Action::Motion(bevy::text::cosmic_text::Motion::RightWord)),
                     LineUp => Some(Action::Motion(bevy::text::cosmic_text::Motion::Up)),
@@ -429,6 +456,10 @@ fn keyboard(
                         };
                         timer_should_reset = false;
                         Some(Action::Motion(bevy::text::cosmic_text::Motion::BufferStart))
+                    }
+                    NewLine => {
+                        editor.0.insert_string("\n", None);
+                        None
                     }
                 };
 
@@ -517,7 +548,11 @@ fn create(
                     min_height: Val::Percent(100.0),
                     ..Default::default()
                 },
-                TextLayout::new_with_no_wrap(),
+                TextLayout::new_with_linebreak(if settings.multiline {
+                    LineBreak::WordBoundary
+                } else {
+                    LineBreak::NoWrap
+                }),
                 Name::new("TextInputInner"),
                 TextInputInner,
             ))
@@ -557,9 +592,16 @@ fn create(
         let overflow_container = commands
             .spawn((
                 Node {
-                    overflow: Overflow::scroll_x(),
-                    justify_content: JustifyContent::FlexEnd,
+                    overflow: if settings.multiline {
+                        Overflow::scroll()
+                    } else {
+                        Overflow::scroll_x()
+                    },
+                    justify_content: JustifyContent::FlexStart,
+                    align_items: AlignItems::FlexEnd,
                     max_width: Val::Percent(100.),
+                    min_height: Val::Percent(100.),
+                    max_height: Val::Percent(100.),
                     ..default()
                 },
                 Name::new("TextInputOverflowContainer"),
