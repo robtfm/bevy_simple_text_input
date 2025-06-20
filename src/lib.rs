@@ -1025,8 +1025,6 @@ fn set_positions(
         let cursor_position = IVec2::from(editor.editor.cursor_position().unwrap_or((0, 0)))
             .as_vec2()
             * inverse_scale_factor;
-        println!("cursor: {:?}", editor.editor.cursor());
-        println!("cursor position: {}", cursor_position);
 
         let child_size = child_node.size();
         let parent_size = parent_node.size();
