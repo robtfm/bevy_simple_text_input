@@ -1292,7 +1292,7 @@ fn section_values(
     mask_character: Option<char>,
 ) -> impl Iterator<Item = String> {
     let vec = match bounds {
-        Some((from, to)) => {
+        Some((from, to)) if from != to => {
             let start = from.min(to);
             let end = from.max(to);
 
@@ -1303,11 +1303,15 @@ fn section_values(
             ]
         }
 
-        None => {
+        _ => {
             vec![
                 masked_value(value, mask_character),
                 String::default(),
-                String::default(),
+                if value.len() == 0 {
+                    String::from("\n")
+                } else {
+                    String::default()
+                },
             ]
         }
     };

@@ -28,9 +28,11 @@ fn setup(mut commands: Commands) {
             height: Val::Percent(100.0),
             align_items: AlignItems::Center,
             justify_content: JustifyContent::Center,
+            flex_direction: FlexDirection::Column,
             ..default()
         })
         .with_children(|parent| {
+            parent.spawn(Text::new("line above"));
             parent.spawn((
                 Node {
                     width: Val::Px(200.0),
@@ -47,6 +49,7 @@ fn setup(mut commands: Commands) {
                 }),
                 TextInputTextColor(TextColor(TEXT_COLOR)),
             ));
+            parent.spawn(Text::new("line below"));
         });
 }
 
