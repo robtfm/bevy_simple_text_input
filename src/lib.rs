@@ -663,6 +663,7 @@ fn keyboard(
                                 ctx.get_contents().await.map_err(|e| format!("{e:?}"))
                             }),
                         ));
+                        select = true;
                         None
                     }
 
@@ -1215,7 +1216,7 @@ fn update_style(
     mut inner_text: InnerText,
     mut writer: TextUiWriter,
 ) {
-    for (entity, font, color, selection_color, mut inactive) in &mut input_query {
+    for (entity, font, color, selection_style, mut inactive) in &mut input_query {
         let Some(inner_entity) = inner_text.inner_entity(entity) else {
             continue;
         };
@@ -1224,10 +1225,11 @@ fn update_style(
             writer.font(inner_entity, index).clone_from(&font.0);
             writer.color(inner_entity, index).clone_from(&color.0);
         }
+        writer.font(inner_entity, 1).clone_from(&font.0);
         writer
             .color(inner_entity, 1)
             .0
-            .clone_from(selection_color.color.as_ref().unwrap_or(&color.0));
+            .clone_from(selection_style.color.as_ref().unwrap_or(&color.0));
 
         let Some(cursor) = inner_text.cursor_style(entity) else {
             continue;
@@ -1291,11 +1293,14 @@ fn section_values(
     bounds: Option<(usize, usize)>,
     mask_character: Option<char>,
 ) -> impl Iterator<Item = String> {
-    let vec = match bounds {
-        Some((from, to)) if from != to => {
-            let start = from.min(to);
-            let end = from.max(to);
+    let bounds = bounds.map(|(from, to)| {
+        let to = to.min(value.len());
+        let from = from.min(to);
+        (from, to)
+    });
 
+    let vec = match bounds {
+        Some((start, end)) if start != end => {
             vec![
                 masked_value(&value[0..start], mask_character),
                 masked_value(&value[start..end], mask_character),
