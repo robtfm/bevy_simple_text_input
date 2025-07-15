@@ -474,7 +474,12 @@ struct InnerText<'w, 's> {
     inner_query: Query<'w, 's, Entity, With<TextInputInner>>,
     computed_text_query: Query<'w, 's, &'static ComputedTextBlock, With<TextInputInner>>,
     computed_node_query: Query<'w, 's, &'static ComputedNode, With<TextInputInner>>,
-    cursor_query: Query<'w, 's, &'static mut Node, With<TextInputCursorDisplay>>,
+    cursor_query: Query<
+        'w,
+        's,
+        (&'static mut Node, &'static mut BackgroundColor),
+        With<TextInputCursorDisplay>,
+    >,
     children_query: Query<'w, 's, &'static Children>,
 }
 impl InnerText<'_, '_> {
@@ -490,7 +495,7 @@ impl InnerText<'_, '_> {
             .ok()
     }
 
-    fn cursor_style(&mut self, entity: Entity) -> Option<&mut Node> {
+    fn cursor_style(&mut self, entity: Entity) -> Option<(&mut Node, &mut BackgroundColor)> {
         self.cursor_query
             .get_mut(
                 self.children_query
@@ -498,7 +503,7 @@ impl InnerText<'_, '_> {
                     .find(|d| self.cursor_query.get(*d).is_ok())?,
             )
             .ok()
-            .map(Mut::into_inner)
+            .map(|(node, bg)| (node.into_inner(), bg.into_inner()))
     }
 
     fn inner_entity(&self, entity: Entity) -> Option<Entity> {
@@ -940,7 +945,7 @@ fn create(
                     position_type: PositionType::Absolute,
                     ..Default::default()
                 },
-                BackgroundColor(Color::WHITE),
+                BackgroundColor(*color.0),
                 TextInputCursorDisplay,
             ))
             .id();
@@ -1102,7 +1107,10 @@ fn set_positions(
         };
 
         let relative_cursor_position = cursor_position - Vec2::new(box_pos_x, box_pos_y);
-        let cursor_size = Vec2::new(px(cursor_style.width) + 1.0, px(cursor_style.height) + 1.0);
+        let cursor_size = Vec2::new(
+            px(cursor_style.0.width) + 1.0,
+            px(cursor_style.0.height) + 1.0,
+        );
 
         if relative_cursor_position.cmplt(Vec2::ZERO).any()
             || (relative_cursor_position + cursor_size)
@@ -1115,14 +1123,14 @@ fn set_positions(
             container_style.top = Val::Px(req_px.y);
         }
 
-        cursor_style.display = if inactive.0 {
+        cursor_style.0.display = if inactive.0 {
             Display::None
         } else {
             Display::Flex
         };
 
-        cursor_style.left = Val::Px(cursor_position.x);
-        cursor_style.top = Val::Px(cursor_position.y + px(cursor_style.height) * 0.1);
+        cursor_style.0.left = Val::Px(cursor_position.x);
+        cursor_style.0.top = Val::Px(cursor_position.y + px(cursor_style.0.height) * 0.1);
 
         cursor_timer.timer.reset();
     }
@@ -1232,7 +1240,7 @@ fn blink_cursor(
             continue;
         };
 
-        style.display = match style.display {
+        style.0.display = match style.0.display {
             Display::Flex => Display::None,
             _ => Display::Flex,
         }
@@ -1296,8 +1304,9 @@ fn update_style(
             continue;
         };
 
-        cursor.width = Val::Px(1f32.max(font.0.font_size * 0.05));
-        cursor.height = Val::Px(font.0.font_size);
+        cursor.0.width = Val::Px(1f32.max(font.0.font_size * 0.05));
+        cursor.0.height = Val::Px(font.0.font_size);
+        cursor.1.0 = *color.0;
 
         inactive.set_changed()
     }
