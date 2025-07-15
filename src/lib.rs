@@ -957,7 +957,6 @@ fn create(
         let container = commands
             .spawn((
                 Node {
-                    min_width: Val::Percent(100.0),
                     min_height: Val::Percent(100.0),
                     ..Default::default()
                 },
@@ -1035,6 +1034,7 @@ fn set_positions(
     mut input_query: Query<
         (
             Entity,
+            &TextInputSettings,
             &mut TextInputCursorTimer,
             &TextInputInactive,
             &mut CosmicEditor,
@@ -1064,7 +1064,7 @@ fn set_positions(
         _ => 0.0,
     };
 
-    for (entity, mut cursor_timer, inactive, mut editor) in &mut input_query {
+    for (entity, settings, mut cursor_timer, inactive, mut editor) in &mut input_query {
         let inverse_scale_factor = inner_text
             .computed_node(entity)
             .map(ComputedNode::inverse_scale_factor)
@@ -1110,19 +1110,18 @@ fn set_positions(
         let cursor_position = IVec2::from(editor.editor.cursor_position().unwrap_or((0, 0)))
             .as_vec2()
             * inverse_scale_factor;
-        println!("{:?} -> {:?}", editor.editor.cursor(), cursor_position);
 
         let child_size = child_node.size();
         let parent_size = parent_node.size();
 
         let box_pos_x = match container_style.left {
             Val::Px(px) => -px,
-            _ => child_size.x - parent_size.x,
+            _ => 0.0,
         };
 
         let box_pos_y = match container_style.top {
             Val::Px(px) => -px,
-            _ => child_size.y - parent_size.y,
+            _ => 0.0,
         };
 
         let Some(cursor_style) = inner_text.cursor_style(entity) else {
@@ -1135,16 +1134,28 @@ fn set_positions(
             px(cursor_style.0.height) + 1.0,
         );
 
+        // println!("cs.top: {:?}", container_style.top);
+        // println!("box: ({box_pos_x},{box_pos_y}, cursor: {cursor_position}, rcp: {relative_cursor_position}");
         if relative_cursor_position.cmplt(Vec2::ZERO).any()
             || (relative_cursor_position + cursor_size)
                 .cmpgt(parent_size)
                 .any()
         {
+            // println!("update");
             let req_px = parent_size * 0.5 - cursor_position;
-            let req_px = req_px.clamp(parent_size - child_size - cursor_size * Vec2::X, Vec2::ZERO);
+            let mut req_px = req_px.clamp(parent_size - child_size - cursor_size * Vec2::X, Vec2::ZERO);
+            if settings.multiline {
+                req_px.x = 0.0;
+            }
             container_style.left = Val::Px(req_px.x);
             container_style.top = Val::Px(req_px.y);
         }
+        // println!(
+        //     "parent_size: {parent_size}, child_size: {child_size}, cursor_position: {cursor_position}, req_unclamped: {}, req_px: {}",
+        //     parent_size * 0.5 - cursor_position,
+        //     (parent_size * 0.5 - cursor_position)
+        //         .clamp(parent_size - child_size - cursor_size * Vec2::X, Vec2::ZERO)
+        // );
 
         cursor_style.0.display = if inactive.0 {
             Display::None
