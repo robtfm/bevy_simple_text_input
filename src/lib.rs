@@ -239,9 +239,20 @@ impl TextInputBinding {
     }
 }
 
-#[cfg(not(target_os = "macos"))]
 impl Default for TextInputNavigationBindings {
     fn default() -> Self {
+        #[cfg(not(target_os = "macos"))]
+        return Self::non_macos_default();
+
+        #[cfg(target_os = "macos")]
+        Self::macos_default()
+    }
+}
+
+impl TextInputNavigationBindings {
+    /// default key bindings for all except macos.
+    /// usually Default::default is fine, but on wasm you need to specify manually
+    pub fn non_macos_default() -> Self {
         use KeyCode::*;
         use TextInputAction::*;
         Self(vec![
@@ -317,11 +328,10 @@ impl Default for TextInputNavigationBindings {
             ),
         ])
     }
-}
 
-#[cfg(target_os = "macos")]
-impl Default for TextInputNavigationBindings {
-    fn default() -> Self {
+    /// default key bindings for macos
+    /// usually Default::default is fine, but on wasm you need to specify manually
+    pub fn macos_default() -> Self {
         use KeyCode::*;
         use TextInputAction::*;
         Self(vec![
