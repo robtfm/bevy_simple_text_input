@@ -325,6 +325,10 @@ impl Default for TextInputNavigationBindings {
         use KeyCode::*;
         use TextInputAction::*;
         Self(vec![
+            (TextStart, TextInputBinding::new(ArrowUp, [SuperLeft])),
+            (TextStart, TextInputBinding::new(ArrowUp, [SuperRight])),
+            (TextEnd, TextInputBinding::new(ArrowDown, [SuperLeft])),
+            (TextEnd, TextInputBinding::new(ArrowDown, [SuperRight])),
             (LineStart, TextInputBinding::new(ArrowLeft, [SuperLeft])),
             (LineStart, TextInputBinding::new(ArrowLeft, [SuperRight])),
             (LineEnd, TextInputBinding::new(ArrowRight, [SuperLeft])),
@@ -347,6 +351,63 @@ impl Default for TextInputNavigationBindings {
             (NewLine, TextInputBinding::new(Enter, [AltRight])),
             (Submit, TextInputBinding::new(Enter, [])),
             (Submit, TextInputBinding::new(NumpadEnter, [])),
+            (SelectAll, TextInputBinding::new(KeyA, [SuperLeft])),
+            (SelectAll, TextInputBinding::new(KeyA, [SuperRight])),
+            #[cfg(feature = "clipboard")]
+            (
+                TextInputAction::Cut,
+                TextInputBinding::new(KeyX, [SuperLeft]),
+            ),
+            #[cfg(feature = "clipboard")]
+            (
+                TextInputAction::Cut,
+                TextInputBinding::new(KeyX, [SuperRight]),
+            ),
+            #[cfg(feature = "clipboard")]
+            (
+                TextInputAction::Copy,
+                TextInputBinding::new(KeyC, [SuperLeft]),
+            ),
+            #[cfg(feature = "clipboard")]
+            (
+                TextInputAction::Copy,
+                TextInputBinding::new(KeyC, [SuperRight]),
+            ),
+            #[cfg(feature = "clipboard")]
+            (
+                TextInputAction::Paste,
+                TextInputBinding::new(KeyV, [SuperLeft]),
+            ),
+            #[cfg(feature = "clipboard")]
+            (
+                TextInputAction::Paste,
+                TextInputBinding::new(KeyV, [SuperRight]),
+            ),
+            (
+                TextInputAction::Undo,
+                TextInputBinding::new(KeyZ, [SuperLeft]),
+            ),
+            (
+                TextInputAction::Undo,
+                TextInputBinding::new(KeyZ, [SuperRight]),
+            ),
+            // Redo on macOS is typically Cmd+Shift+Z
+            (
+                TextInputAction::Redo,
+                TextInputBinding::new(KeyZ, [SuperLeft, ShiftLeft]),
+            ),
+            (
+                TextInputAction::Redo,
+                TextInputBinding::new(KeyZ, [SuperRight, ShiftLeft]),
+            ),
+            (
+                TextInputAction::Redo,
+                TextInputBinding::new(KeyZ, [SuperLeft, ShiftRight]),
+            ),
+            (
+                TextInputAction::Redo,
+                TextInputBinding::new(KeyZ, [SuperRight, ShiftRight]),
+            ),
         ])
     }
 }
