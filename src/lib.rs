@@ -445,10 +445,12 @@ struct CosmicEditor {
     redo: Vec<Change>,
 }
 
-impl Default for CosmicEditor {
-    fn default() -> Self {
+impl CosmicEditor {
+    fn new(text: &str) -> Self {
+        let mut editor = Editor::new(CosmicBuffer::default().0);
+        editor.insert_string(text, None);
         Self {
-            editor: Editor::new(CosmicBuffer::default().0),
+            editor,
             selection_bounds: None,
             undo: Vec::default(),
             redo: Vec::default(),
@@ -609,12 +611,20 @@ fn keyboard(
 
         // use a lazy cell to avoid initializing the editor if not required (copying the buffer is expensive)
         let mut editor = Lazy::new(|| {
-            editor.editor.with_buffer_mut(|b| {
+            let (max_line, max_index) = editor.editor.with_buffer_mut(|b| {
                 b.clone_from(&inner_text.computed_text(input_entity).unwrap().buffer().0);
+                (
+                    b.lines.len() - 1,
+                    b.lines.last().map(|l| l.text().len()).unwrap_or(0),
+                )
             });
             // we need to reset the cursor position if it's invalid, else some actions (backspace) will panic
             if editor.editor.cursor_position().is_none() {
-                editor.editor.set_cursor(Cursor::default());
+                editor.editor.set_cursor(Cursor {
+                    line: max_line,
+                    index: max_index,
+                    affinity: bevy::text::cosmic_text::Affinity::Before,
+                });
             }
             editor.editor.start_change();
             editor
@@ -743,25 +753,19 @@ fn keyboard(
                         }
 
                         is_undo_redo = true;
-
                         None
                     }
 
                     Redo => {
                         if let Some(mut redo) = editor.redo.pop() {
                             redo.reverse();
-
                             editor.editor.finish_change();
-
                             editor.editor.apply_change(&redo);
-
                             editor.editor.start_change();
-
                             editor.undo.push(redo);
                         }
 
                         is_undo_redo = true;
-
                         None
                     }
                 };
@@ -1022,7 +1026,7 @@ fn create(
         commands
             .entity(trigger.target())
             .insert(FocusPolicy::Block)
-            .insert(CosmicEditor::default());
+            .insert(CosmicEditor::new(&text_input.0));
     }
 }
 
@@ -1082,16 +1086,31 @@ fn set_positions(
             continue;
         };
 
-        let Some(cursor_style) = inner_text.cursor_style(entity) else {
+        if font_system.0.db().is_empty() {
+            editor.set_changed();
             continue;
-        };
+        }
 
         let editor = editor.bypass_change_detection();
+
+        // we need to reset the cursor position if it's invalid, else shape will fail
+        if editor.editor.cursor_position().is_none() {
+            editor.editor.with_buffer_mut(|b| {
+                b.clone_from(&inner_text.computed_text(entity).unwrap().buffer().0);
+            });
+
+            editor.editor.action(
+                &mut font_system,
+                Action::Motion(bevy::text::cosmic_text::Motion::BufferEnd),
+            );
+        }
+
         editor.editor.shape_as_needed(&mut font_system, false);
 
         let cursor_position = IVec2::from(editor.editor.cursor_position().unwrap_or((0, 0)))
             .as_vec2()
             * inverse_scale_factor;
+        println!("{:?} -> {:?}", editor.editor.cursor(), cursor_position);
 
         let child_size = child_node.size();
         let parent_size = parent_node.size();
@@ -1104,6 +1123,10 @@ fn set_positions(
         let box_pos_y = match container_style.top {
             Val::Px(px) => -px,
             _ => child_size.y - parent_size.y,
+        };
+
+        let Some(cursor_style) = inner_text.cursor_style(entity) else {
+            continue;
         };
 
         let relative_cursor_position = cursor_position - Vec2::new(box_pos_x, box_pos_y);
