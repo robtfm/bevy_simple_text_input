@@ -1143,7 +1143,8 @@ fn set_positions(
         {
             // println!("update");
             let req_px = parent_size * 0.5 - cursor_position;
-            let mut req_px = req_px.clamp(parent_size - child_size - cursor_size * Vec2::X, Vec2::ZERO);
+            let mut req_px =
+                req_px.clamp(parent_size - child_size - cursor_size * Vec2::X, Vec2::ZERO);
             if settings.multiline {
                 req_px.x = 0.0;
             }
