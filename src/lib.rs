@@ -57,6 +57,7 @@ impl Plugin for TextInputPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<TextInputNavigationBindings>()
             .add_event::<TextInputSubmitEvent>()
+            .add_event::<TextInputPointerEvent>()
             .add_observer(create)
             .add_systems(
                 Update,
@@ -68,6 +69,7 @@ impl Plugin for TextInputPlugin {
                     update_style,
                     update_placeholder_style,
                     keyboard,
+                    pointer,
                     update_value,
                 )
                     .chain()
@@ -472,6 +474,38 @@ impl CosmicEditor {
             redo: Vec::default(),
         }
     }
+
+    fn update_selection_bounds(&mut self) {
+        self.selection_bounds = self.editor.selection_bounds().map(|(from, to)| {
+            let index = |c: Cursor| -> usize {
+                self.editor.with_buffer(|b| {
+                    let mut lines = b.lines.iter();
+
+                    let prior_sum: usize = lines
+                        .by_ref()
+                        .take(c.line)
+                        .map(|line| line.text().len() + 1)
+                        .sum();
+
+                    let line_sum = lines
+                        .next()
+                        .map(|line| {
+                            line.text()
+                                .char_indices()
+                                .enumerate()
+                                .find(|(_, ci)| ci.0 == c.index)
+                                .map(|(ix, _)| ix)
+                                .unwrap_or(line.text().len())
+                        })
+                        .unwrap_or(0);
+
+                    prior_sum + line_sum
+                })
+            };
+
+            (index(from), index(to))
+        });
+    }
 }
 
 #[derive(Component)]
@@ -836,39 +870,155 @@ fn keyboard(
                     .join("");
             });
 
-            editor.selection_bounds = editor.editor.selection_bounds().map(|(from, to)| {
-                let index = |c: Cursor| -> usize {
-                    editor.editor.with_buffer(|b| {
-                        let mut lines = b.lines.iter();
-
-                        let prior_sum: usize = lines
-                            .by_ref()
-                            .take(c.line)
-                            .map(|line| line.text().len() + 1)
-                            .sum();
-
-                        let line_sum = lines
-                            .next()
-                            .map(|line| {
-                                line.text()
-                                    .char_indices()
-                                    .enumerate()
-                                    .find(|(_, ci)| ci.0 == c.index)
-                                    .map(|(ix, _)| ix)
-                                    .unwrap_or(line.text().len())
-                            })
-                            .unwrap_or(0);
-
-                        prior_sum + line_sum
-                    })
-                };
-
-                (index(from), index(to))
-            });
+            editor.update_selection_bounds();
         }
     }
 
     input_reader.clear(&input_events);
+}
+
+/// TextPositionFinder
+#[derive(SystemParam)]
+pub struct TextPositionFinder<'w, 's> {
+    block: Query<'w, 's, &'static ComputedTextBlock>,
+    reader: TextUiReader<'w, 's>,
+}
+
+impl TextPositionFinder<'_, '_> {
+    /// TextPositionFinder
+    pub fn cursor_hit(&self, entity: Entity, position: Vec2) -> Option<Cursor> {
+        let block = self.block.get(entity).ok()?;
+        let buffer = block.buffer();
+        buffer.hit(position.x, position.y)
+    }
+
+    /// TextPositionFinder
+    pub fn cursor_entity(&mut self, entity: Entity, position: Vec2) -> Option<(Entity, usize)> {
+        let Cursor {
+            mut line,
+            mut index,
+            ..
+        } = self.cursor_hit(entity, position)?;
+        for (entity, _, text, _, _) in self.reader.iter(entity) {
+            let mut parts = text.split('\n');
+            let line_breaks = parts.clone().count() - 1;
+            if line_breaks < line {
+                line -= line_breaks;
+                continue;
+            }
+
+            let entity_line_offset: usize = parts.by_ref().take(line).map(|text| text.len()).sum();
+            line = 0;
+
+            let len = parts.next().unwrap().len();
+            if len > index {
+                return Some((entity, entity_line_offset + index));
+            } else {
+                index -= len;
+            }
+
+            if parts.next().is_some() {
+                panic!();
+            }
+        }
+
+        None
+    }
+}
+
+/// TextInputPointerAction
+#[derive(Debug, PartialEq)]
+pub enum TextInputPointerAction {
+    /// TextInputPointerAction
+    Press,
+    /// TextInputPointerAction
+    Drag,
+    /// TextInputPointerAction
+    Release,
+}
+
+/// TextInputPointerEvent
+#[derive(Event, Debug)]
+pub struct TextInputPointerEvent {
+    /// TextInputPointerEvent
+    pub position: Vec2,
+    /// TextInputPointerEvent
+    pub action: TextInputPointerAction,
+}
+
+#[allow(clippy::too_many_arguments)]
+fn pointer(
+    mut commands: Commands,
+    mut events: EventReader<TextInputPointerEvent>,
+    mut last_action: Local<Option<(Entity, f32, usize)>>,
+    mut buffers: Query<(&TextInputInactive, Entity, &mut CosmicEditor)>,
+    mut font_system: ResMut<CosmicFontSystem>,
+    inner_text: InnerText,
+    time: Res<Time>,
+    helper: TransformHelper,
+) {
+    for event in events.read() {
+        println!("got {event:?}");
+        let time = time.elapsed_secs();
+
+        let Some((_, entity, mut editor)) = buffers.iter_mut().find(|(inactive, ..)| !inactive.0)
+        else {
+            println!("no entity");
+            continue;
+        };
+
+        let click_count = last_action
+            .filter(|(e, t, _)| {
+                *e == entity && (*t > time - 0.25 || event.action == TextInputPointerAction::Drag)
+            })
+            .map(|(_, _, c)| c)
+            .unwrap_or(0);
+
+        editor.editor.with_buffer_mut(|b| {
+            b.clone_from(&inner_text.computed_text(entity).unwrap().buffer().0)
+        });
+        editor.editor.shape_as_needed(&mut font_system, false);
+
+        let top_left = helper
+            .compute_global_transform(inner_text.inner_entity(entity).unwrap())
+            .unwrap()
+            .translation()
+            .xy()
+            - inner_text.computed_node(entity).unwrap().size() * 0.5;
+        let relative_position = event.position - top_left;
+        println!("rel pos {:?}", relative_position);
+        let Some(cursor) = editor
+            .editor
+            .with_buffer(|b| b.hit(relative_position.x, relative_position.y))
+        else {
+            println!("no cursor");
+            continue;
+        };
+
+        match event.action {
+            TextInputPointerAction::Release => {
+                commands.entity(entity).remove::<Selecting>();
+            }
+            TextInputPointerAction::Press => {
+                commands.entity(entity).insert(Selecting);
+                editor.editor.set_cursor(cursor);
+                editor.editor.set_selection(match click_count {
+                    0 => Selection::Normal(cursor),
+                    1 => Selection::Word(cursor),
+                    _ => Selection::Line(cursor),
+                });
+                *last_action = Some((entity, time, click_count + 1));
+            }
+            TextInputPointerAction::Drag => {
+                commands.entity(entity).insert(Selecting);
+                if click_count > 0 {
+                    editor.editor.set_cursor(cursor);
+                }
+            }
+        }
+
+        editor.update_selection_bounds();
+    }
 }
 
 fn update_value(
@@ -879,7 +1029,7 @@ fn update_value(
             &TextInputSettings,
             &CosmicEditor,
         ),
-        Changed<TextInputValue>,
+        Or<(Changed<TextInputValue>, Changed<CosmicEditor>)>,
     >,
     inner_text: InnerText,
     mut writer: TextUiWriter,
@@ -1054,6 +1204,7 @@ fn set_positions(
             &mut TextInputCursorTimer,
             &TextInputInactive,
             &mut CosmicEditor,
+            Option<&Selecting>,
         ),
         Or<(
             Changed<TextInputInactive>,
@@ -1080,7 +1231,9 @@ fn set_positions(
         _ => 0.0,
     };
 
-    for (entity, settings, mut cursor_timer, inactive, mut editor) in &mut input_query {
+    for (entity, settings, mut cursor_timer, inactive, mut editor, maybe_selecting) in
+        &mut input_query
+    {
         let inverse_scale_factor = inner_text
             .computed_node(entity)
             .map(ComputedNode::inverse_scale_factor)
@@ -1174,7 +1327,7 @@ fn set_positions(
         //         .clamp(parent_size - child_size - cursor_size * Vec2::X, Vec2::ZERO)
         // );
 
-        cursor_style.0.display = if inactive.0 {
+        cursor_style.0.display = if inactive.0 || maybe_selecting.is_some() {
             Display::None
         } else {
             Display::Flex
@@ -1266,13 +1419,21 @@ fn set_selection(
     }
 }
 
+#[derive(Component)]
+struct Selecting;
+
 // Blinks the cursor on a timer.
 fn blink_cursor(
-    mut input_query: Query<(Entity, &mut TextInputCursorTimer, Ref<TextInputInactive>)>,
+    mut input_query: Query<(
+        Entity,
+        &mut TextInputCursorTimer,
+        Ref<TextInputInactive>,
+        Option<&Selecting>,
+    )>,
     mut inner_text: InnerText,
     time: Res<Time>,
 ) {
-    for (entity, mut cursor_timer, inactive) in &mut input_query {
+    for (entity, mut cursor_timer, inactive, maybe_selecting) in &mut input_query {
         if inactive.0 {
             continue;
         }
@@ -1291,9 +1452,9 @@ fn blink_cursor(
             continue;
         };
 
-        style.0.display = match style.0.display {
-            Display::Flex => Display::None,
-            _ => Display::Flex,
+        style.0.display = match (maybe_selecting.is_some(), style.0.display) {
+            (false, Display::None) => Display::Flex,
+            _ => Display::None,
         }
     }
 }
@@ -1433,7 +1594,7 @@ fn section_values(
             vec![
                 masked_value(value, mask_character),
                 String::default(),
-                if value.len() == 0 {
+                if value.is_empty() {
                     String::from("\n")
                 } else {
                     String::default()
