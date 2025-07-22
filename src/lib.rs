@@ -689,7 +689,9 @@ fn keyboard(
             match copy_result {
                 Ok(text) => {
                     editor.editor.delete_selection();
-                    editor.editor.insert_string(&text, None);
+                    editor
+                        .editor
+                        .insert_string(&text.replace("\r\n", "\n"), None);
                 }
                 Err(err) => warn!("failed to read clipboard: {err}"),
             }
