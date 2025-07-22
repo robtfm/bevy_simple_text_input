@@ -959,12 +959,10 @@ fn pointer(
     helper: TransformHelper,
 ) {
     for event in events.read() {
-        println!("got {event:?}");
         let time = time.elapsed_secs();
 
         let Some((_, entity, mut editor)) = buffers.iter_mut().find(|(inactive, ..)| !inactive.0)
         else {
-            println!("no entity");
             continue;
         };
 
@@ -987,12 +985,10 @@ fn pointer(
             .xy()
             - inner_text.computed_node(entity).unwrap().size() * 0.5;
         let relative_position = event.position - top_left;
-        println!("rel pos {:?}", relative_position);
         let Some(cursor) = editor
             .editor
             .with_buffer(|b| b.hit(relative_position.x, relative_position.y))
         else {
-            println!("no cursor");
             continue;
         };
 
