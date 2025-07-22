@@ -2,8 +2,8 @@
 
 use bevy::prelude::*;
 use bevy_simple_text_input::{
-    TextInput, TextInputPlugin, TextInputSubmitEvent, TextInputSystem, TextInputTextColor,
-    TextInputTextFont,
+    TextInput, TextInputPlugin, TextInputPointerAction, TextInputPointerEvent,
+    TextInputSubmitEvent, TextInputSystem, TextInputTextColor, TextInputTextFont,
 };
 
 const BORDER_COLOR_ACTIVE: Color = Color::srgb(0.75, 0.52, 0.99);
@@ -16,6 +16,7 @@ fn main() {
         .add_plugins(TextInputPlugin)
         .add_systems(Startup, setup)
         .add_systems(Update, listener.after(TextInputSystem))
+        .add_systems(Update, send_mouse)
         .run();
 }
 
@@ -57,4 +58,42 @@ fn listener(mut events: EventReader<TextInputSubmitEvent>) {
     for event in events.read() {
         info!("{:?} submitted: {}", event.entity, event.value);
     }
+}
+
+fn send_mouse(
+    window: Query<&Window>,
+    button: Res<ButtonInput<MouseButton>>,
+    mut was_pressed: Local<bool>,
+    mut prev_pos: Local<Vec2>,
+    mut pointer: EventWriter<TextInputPointerEvent>,
+    interaction_check: Query<&Interaction, With<TextInput>>,
+) {
+    let just_pressed = button.just_pressed(MouseButton::Left);
+    let still_pressed = *was_pressed && button.pressed(MouseButton::Left);
+
+    let position = window
+        .single()
+        .unwrap()
+        .cursor_position()
+        .unwrap_or_default();
+
+    if just_pressed && interaction_check.single().unwrap() != &Interaction::None {
+        pointer.write(TextInputPointerEvent {
+            position,
+            action: TextInputPointerAction::Press,
+        });
+    } else if still_pressed && *prev_pos != position {
+        pointer.write(TextInputPointerEvent {
+            position,
+            action: TextInputPointerAction::Drag,
+        });
+    } else if *was_pressed && !still_pressed {
+        pointer.write(TextInputPointerEvent {
+            position,
+            action: TextInputPointerAction::Release,
+        });
+    }
+
+    *was_pressed = just_pressed || still_pressed;
+    *prev_pos = position;
 }

@@ -36,8 +36,8 @@ fn setup(mut commands: Commands) {
         .with_children(|parent| {
             parent.spawn((
                 Node {
-                        width: Val::Px(400.0),
-                        height: Val::Px(200.0),
+                        width: Val::Px(800.0),
+                        height: Val::Px(400.0),
                         border: UiRect::all(Val::Px(5.0)),
                         padding: UiRect::all(Val::Px(5.0)),
                         ..default()
@@ -46,7 +46,7 @@ fn setup(mut commands: Commands) {
                 BackgroundColor::from(BACKGROUND_COLOR),
                 TextInput,
                 TextInputTextFont(TextFont {
-                    font_size: 40.,
+                    font_size: 20.,
                     ..Default::default()
                 }),
                 TextInputTextColor(TextColor(TEXT_COLOR)),
