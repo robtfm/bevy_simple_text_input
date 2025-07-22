@@ -948,7 +948,6 @@ pub struct TextInputPointerEvent {
 
 #[allow(clippy::too_many_arguments)]
 fn pointer(
-    mut commands: Commands,
     mut events: EventReader<TextInputPointerEvent>,
     mut last_action: Local<Option<(Entity, f32, usize)>>,
     mut buffers: Query<(&TextInputInactive, Entity, &mut CosmicEditor)>,
@@ -996,11 +995,8 @@ fn pointer(
         };
 
         match event.action {
-            TextInputPointerAction::Release => {
-                commands.entity(entity).remove::<Selecting>();
-            }
+            TextInputPointerAction::Release => (),
             TextInputPointerAction::Press => {
-                commands.entity(entity).insert(Selecting);
                 editor.editor.set_cursor(cursor);
                 editor.editor.set_selection(match click_count {
                     0 => Selection::Normal(cursor),
@@ -1010,7 +1006,6 @@ fn pointer(
                 *last_action = Some((entity, time, click_count + 1));
             }
             TextInputPointerAction::Drag => {
-                commands.entity(entity).insert(Selecting);
                 if click_count > 0 {
                     editor.editor.set_cursor(cursor);
                 }
@@ -1204,7 +1199,6 @@ fn set_positions(
             &mut TextInputCursorTimer,
             &TextInputInactive,
             &mut CosmicEditor,
-            Option<&Selecting>,
         ),
         Or<(
             Changed<TextInputInactive>,
@@ -1231,9 +1225,16 @@ fn set_positions(
         _ => 0.0,
     };
 
-    for (entity, settings, mut cursor_timer, inactive, mut editor, maybe_selecting) in
-        &mut input_query
-    {
+    for (entity, settings, mut cursor_timer, inactive, mut editor) in &mut input_query {
+        if inactive.0 {
+            let Some(cursor_style) = inner_text.cursor_style(entity) else {
+                continue;
+            };
+
+            cursor_style.0.display = Display::None;
+            continue;
+        }
+
         let inverse_scale_factor = inner_text
             .computed_node(entity)
             .map(ComputedNode::inverse_scale_factor)
@@ -1262,18 +1263,16 @@ fn set_positions(
 
         let editor = editor.bypass_change_detection();
 
+        editor.editor.with_buffer_mut(|b| {
+            b.clone_from(&inner_text.computed_text(entity).unwrap().buffer().0);
+        });
         // we need to reset the cursor position if it's invalid, else shape will fail
         if editor.editor.cursor_position().is_none() {
-            editor.editor.with_buffer_mut(|b| {
-                b.clone_from(&inner_text.computed_text(entity).unwrap().buffer().0);
-            });
-
             editor.editor.action(
                 &mut font_system,
                 Action::Motion(bevy::text::cosmic_text::Motion::BufferEnd),
             );
         }
-
         editor.editor.shape_as_needed(&mut font_system, false);
 
         let cursor_position = IVec2::from(editor.editor.cursor_position().unwrap_or((0, 0)))
@@ -1327,7 +1326,10 @@ fn set_positions(
         //         .clamp(parent_size - child_size - cursor_size * Vec2::X, Vec2::ZERO)
         // );
 
-        cursor_style.0.display = if inactive.0 || maybe_selecting.is_some() {
+        cursor_style.0.display = if editor
+            .selection_bounds
+            .is_some_and(|(start, end)| start != end)
+        {
             Display::None
         } else {
             Display::Flex
@@ -1405,10 +1407,10 @@ fn set_selection(
                     c.spawn((
                         Node {
                             position_type: PositionType::Absolute,
-                            left: Val::Px(segment.x),
-                            top: Val::Px(segment.y),
-                            width: Val::Px(segment.z),
-                            height: Val::Px(segment.w),
+                            left: Val::Px(segment.x.floor()),
+                            top: Val::Px(segment.y.floor()),
+                            width: Val::Px(segment.z.ceil()),
+                            height: Val::Px(segment.w.ceil()),
                             ..Default::default()
                         },
                         BackgroundColor(style.background.unwrap_or(Color::srgb(0.3, 0.3, 1.0))),
@@ -1419,21 +1421,18 @@ fn set_selection(
     }
 }
 
-#[derive(Component)]
-struct Selecting;
-
 // Blinks the cursor on a timer.
 fn blink_cursor(
     mut input_query: Query<(
         Entity,
         &mut TextInputCursorTimer,
         Ref<TextInputInactive>,
-        Option<&Selecting>,
+        &CosmicEditor,
     )>,
     mut inner_text: InnerText,
     time: Res<Time>,
 ) {
-    for (entity, mut cursor_timer, inactive, maybe_selecting) in &mut input_query {
+    for (entity, mut cursor_timer, inactive, editor) in &mut input_query {
         if inactive.0 {
             continue;
         }
@@ -1452,7 +1451,12 @@ fn blink_cursor(
             continue;
         };
 
-        style.0.display = match (maybe_selecting.is_some(), style.0.display) {
+        style.0.display = match (
+            editor
+                .selection_bounds
+                .is_some_and(|(start, end)| start != end),
+            style.0.display,
+        ) {
             (false, Display::None) => Display::Flex,
             _ => Display::None,
         }
