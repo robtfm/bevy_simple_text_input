@@ -39,7 +39,7 @@ use bevy::{
         ComputedTextBlock, CosmicBuffer, CosmicFontSystem, LineBreak,
         cosmic_text::{Action, Change, Cursor, Edit, Editor, Selection},
     },
-    ui::FocusPolicy,
+    // ui::FocusPolicy,
 };
 use once_cell::unsync::Lazy;
 
@@ -1183,7 +1183,7 @@ fn create(
         // Prevent clicks from registering on UI elements underneath the text input.
         commands
             .entity(trigger.target())
-            .insert(FocusPolicy::Block)
+            // .insert(FocusPolicy::Block)
             .insert(CosmicEditor::new(&text_input.0));
     }
 }
