@@ -661,20 +661,22 @@ fn keyboard(
 
         // use a lazy cell to avoid initializing the editor if not required (copying the buffer is expensive)
         let mut editor = Lazy::new(|| {
-            let (max_line, max_index) = editor.editor.with_buffer_mut(|b| {
+            let base_cursor = editor.editor.cursor();
+            let mut fixed_cursor = editor.editor.cursor();
+            editor.editor.with_buffer_mut(|b| {
                 b.clone_from(&inner_text.computed_text(input_entity).unwrap().buffer().0);
-                (
-                    b.lines.len() - 1,
-                    b.lines.last().map(|l| l.text().len()).unwrap_or(0),
-                )
+
+                fixed_cursor.line = fixed_cursor.line.clamp(0, b.lines.len());
+                fixed_cursor.index = fixed_cursor.index.clamp(
+                    0,
+                    b.lines
+                        .get(fixed_cursor.line)
+                        .map(|l| l.text().len())
+                        .unwrap_or(0),
+                );
             });
-            // we need to reset the cursor position if it's invalid, else some actions (backspace) will panic
-            if editor.editor.cursor_position().is_none() {
-                editor.editor.set_cursor(Cursor {
-                    line: max_line,
-                    index: max_index,
-                    affinity: bevy::text::cosmic_text::Affinity::Before,
-                });
+            if fixed_cursor != base_cursor {
+                editor.editor.set_cursor(fixed_cursor);
             }
             editor.editor.start_change();
             editor
