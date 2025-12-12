@@ -487,19 +487,7 @@ impl CosmicEditor {
                         .map(|line| line.text().len() + 1)
                         .sum();
 
-                    let line_sum = lines
-                        .next()
-                        .map(|line| {
-                            line.text()
-                                .char_indices()
-                                .enumerate()
-                                .find(|(_, ci)| ci.0 == c.index)
-                                .map(|(ix, _)| ix)
-                                .unwrap_or(line.text().len())
-                        })
-                        .unwrap_or(0);
-
-                    prior_sum + line_sum
+                    prior_sum + c.index
                 })
             };
 
