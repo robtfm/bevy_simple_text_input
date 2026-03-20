@@ -1334,6 +1334,7 @@ fn set_selection(
     mut query: Query<(Entity, &mut CosmicEditor, &TextInputSelectionStyle), Changed<CosmicEditor>>,
     children: Query<&Children>,
     sel: Query<&TextInputSelection>,
+    inner_text: InnerText,
     mut commands: Commands,
     mut font_system: ResMut<CosmicFontSystem>,
 ) {
@@ -1390,15 +1391,20 @@ fn set_selection(
                 }
             });
 
+            let inverse_scale_factor = inner_text
+                .computed_node(entity)
+                .map(ComputedNode::inverse_scale_factor)
+                .unwrap_or(1.0);
+
             commands.entity(selection).with_children(|c| {
                 for segment in segments {
                     c.spawn((
                         Node {
                             position_type: PositionType::Absolute,
-                            left: Val::Px(segment.x.floor()),
-                            top: Val::Px(segment.y.floor()),
-                            width: Val::Px(segment.z.ceil()),
-                            height: Val::Px(segment.w.ceil()),
+                            left: Val::Px((segment.x * inverse_scale_factor).floor()),
+                            top: Val::Px((segment.y * inverse_scale_factor).floor()),
+                            width: Val::Px((segment.z * inverse_scale_factor).ceil()),
+                            height: Val::Px((segment.w * inverse_scale_factor).ceil()),
                             ..Default::default()
                         },
                         BackgroundColor(style.background.unwrap_or(Color::srgb(0.3, 0.3, 1.0))),
