@@ -1559,8 +1559,11 @@ fn update_placeholder_style(
             continue;
         };
 
-        font.clone_from(&base_font.0);
-        color.clone_from(&base_color.0);
+        font.clone_from(placeholder.text_font.as_ref().unwrap_or(&base_font.0));
+        *color = placeholder
+            .text_color
+            .clone()
+            .unwrap_or_else(|| placeholder_color(&base_color.0));
         text.0 = placeholder.value.clone();
 
         // mark so other systems update correctly
