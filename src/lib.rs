@@ -275,10 +275,10 @@ impl TextInputNavigationBindings {
             (DeletePrev, TextInputBinding::new(Backspace, [])),
             (DeletePrev, TextInputBinding::new(NumpadBackspace, [])),
             (DeleteNext, TextInputBinding::new(Delete, [])),
-            // newline must be before submit as it is the same but with modifiers
-            (NewLine, TextInputBinding::new(Enter, [ShiftLeft])),
-            (NewLine, TextInputBinding::new(Enter, [ShiftRight])),
-            (Submit, TextInputBinding::new(Enter, [])),
+            // submit must be before newline as it is the same but with modifiers
+            (Submit, TextInputBinding::new(Enter, [ShiftLeft])),
+            (Submit, TextInputBinding::new(Enter, [ShiftRight])),
+            (NewLine, TextInputBinding::new(Enter, [])),
             (Submit, TextInputBinding::new(NumpadEnter, [])),
             (SelectAll, TextInputBinding::new(KeyA, [ControlLeft])),
             (SelectAll, TextInputBinding::new(KeyA, [ControlRight])),
@@ -362,12 +362,12 @@ impl TextInputNavigationBindings {
             (DeletePrev, TextInputBinding::new(Backspace, [])),
             (DeletePrev, TextInputBinding::new(NumpadBackspace, [])),
             (DeleteNext, TextInputBinding::new(Delete, [])),
-            // newline must be before submit as it is the same but with modifiers
-            (NewLine, TextInputBinding::new(Enter, [ShiftLeft])),
-            (NewLine, TextInputBinding::new(Enter, [ShiftRight])),
-            (NewLine, TextInputBinding::new(Enter, [AltLeft])),
-            (NewLine, TextInputBinding::new(Enter, [AltRight])),
-            (Submit, TextInputBinding::new(Enter, [])),
+            // submit must be before newline as it is the same but with modifiers
+            (Submit, TextInputBinding::new(Enter, [ShiftLeft])),
+            (Submit, TextInputBinding::new(Enter, [ShiftRight])),
+            (Submit, TextInputBinding::new(Enter, [AltLeft])),
+            (Submit, TextInputBinding::new(Enter, [AltRight])),
+            (NewLine, TextInputBinding::new(Enter, [])),
             (Submit, TextInputBinding::new(NumpadEnter, [])),
             (SelectAll, TextInputBinding::new(KeyA, [SuperLeft])),
             (SelectAll, TextInputBinding::new(KeyA, [SuperRight])),
@@ -721,16 +721,20 @@ fn keyboard(
                     LineDown => Some(Action::Motion(Motion::Down)),
                     DeletePrev => Some(Action::Backspace),
                     DeleteNext => Some(Action::Delete),
-                    Submit => {
+                    NewLine if settings.multiline => Some(Action::Enter),
+                    // NewLine here only fires in single-line mode (guarded arm above takes priority)
+                    Submit | NewLine => {
                         if settings.retain_on_submit {
                             submitted_value = Some(text_input.0.clone());
                         } else {
                             submitted_value = Some(std::mem::take(&mut text_input.0));
                         };
                         timer_should_reset = false;
+                        // submit may be triggered with shift held; ensure selection is dropped
+                        // so cosmic-text doesn't try to shape a stale anchor next frame
+                        select = false;
                         Some(Action::Motion(Motion::BufferStart))
                     }
-                    NewLine => settings.multiline.then_some(Action::Enter),
                     SelectAll => {
                         editor
                             .editor
