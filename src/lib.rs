@@ -654,9 +654,10 @@ fn keyboard(
             editor.editor.with_buffer_mut(|b| {
                 b.clone_from(&inner_text.computed_text(input_entity).unwrap().buffer().0);
 
-                fixed_cursor.line = fixed_cursor.line.clamp(0, b.lines.len());
-                fixed_cursor.index = fixed_cursor.index.clamp(
-                    0,
+                // valid line indices are 0..b.lines.len(); using ..=len causes
+                // cosmic-text's shape_until_cursor to panic when the buffer just shrank
+                fixed_cursor.line = fixed_cursor.line.min(b.lines.len().saturating_sub(1));
+                fixed_cursor.index = fixed_cursor.index.min(
                     b.lines
                         .get(fixed_cursor.line)
                         .map(|l| l.text().len())
