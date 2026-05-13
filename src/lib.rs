@@ -724,7 +724,8 @@ fn keyboard(
                     NewLine if settings.multiline => Some(Action::Enter),
                     // NewLine here only fires in single-line mode (guarded arm above takes priority)
                     Submit | NewLine => {
-                        if settings.retain_on_submit {
+                        let retain = settings.retain_on_submit;
+                        if retain {
                             submitted_value = Some(text_input.0.clone());
                         } else {
                             submitted_value = Some(std::mem::take(&mut text_input.0));
@@ -733,7 +734,13 @@ fn keyboard(
                         // submit may be triggered with shift held; ensure selection is dropped
                         // so cosmic-text doesn't try to shape a stale anchor next frame
                         select = false;
-                        Some(Action::Motion(Motion::BufferStart))
+                        // when clearing, reset cursor to start of the now-empty buffer;
+                        // when retaining, leave the cursor where it was
+                        if retain {
+                            None
+                        } else {
+                            Some(Action::Motion(Motion::BufferStart))
+                        }
                     }
                     SelectAll => {
                         editor
