@@ -401,15 +401,9 @@ impl TextInputNavigationBindings {
                 TextInputAction::Paste,
                 TextInputBinding::new(KeyV, [SuperRight]),
             ),
-            (
-                TextInputAction::Undo,
-                TextInputBinding::new(KeyZ, [SuperLeft]),
-            ),
-            (
-                TextInputAction::Undo,
-                TextInputBinding::new(KeyZ, [SuperRight]),
-            ),
-            // Redo on macOS is typically Cmd+Shift+Z
+            // Redo (Cmd+Shift+Z) must come before Undo (Cmd+Z): the matcher
+            // picks the first binding whose modifiers are all held, and Undo's
+            // modifiers are a subset of Redo's.
             (
                 TextInputAction::Redo,
                 TextInputBinding::new(KeyZ, [SuperLeft, ShiftLeft]),
@@ -425,6 +419,14 @@ impl TextInputNavigationBindings {
             (
                 TextInputAction::Redo,
                 TextInputBinding::new(KeyZ, [SuperRight, ShiftRight]),
+            ),
+            (
+                TextInputAction::Undo,
+                TextInputBinding::new(KeyZ, [SuperLeft]),
+            ),
+            (
+                TextInputAction::Undo,
+                TextInputBinding::new(KeyZ, [SuperRight]),
             ),
         ])
     }
