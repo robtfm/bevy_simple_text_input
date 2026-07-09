@@ -239,6 +239,16 @@ impl TextInputBinding {
             modifiers: modifiers.into(),
         }
     }
+
+    /// Primary key of this binding.
+    pub fn key(&self) -> KeyCode {
+        self.key
+    }
+
+    /// Modifier keys that must be held for this binding to apply.
+    pub fn modifiers(&self) -> &[KeyCode] {
+        &self.modifiers
+    }
 }
 
 impl Default for TextInputNavigationBindings {
